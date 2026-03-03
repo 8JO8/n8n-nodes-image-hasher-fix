@@ -1,110 +1,153 @@
-import {
-    IExecuteFunctions,
-    INodeExecutionData,
-    INodeType,
-    INodeTypeDescription,
-    NodeOperationError,
+import type {
+  IExecuteFunctions,
+  INodeExecutionData,
+  INodeType,
+  INodeTypeDescription,
 } from 'n8n-workflow';
 
-import * as imageHash from 'image-hash';
-import * as fs from 'fs';
+import { tmpName } from 'tmp-promise';
+import { promises as fs } from 'fs';
 import * as path from 'path';
 
+import imghash from 'imghash';
+
+type HashMethod = 'phash' | 'dhash' | 'ahash';
+
+function extFromMime(mime?: string): string | undefined {
+  if (!mime) return undefined;
+  if (mime === 'image/jpeg') return 'jpg';
+  if (mime === 'image/png') return 'png';
+  if (mime === 'image/webp') return 'webp';
+  if (mime === 'image/gif') return 'gif';
+  if (mime === 'image/bmp') return 'bmp';
+  if (mime === 'image/tiff') return 'tiff';
+  return undefined;
+}
+
+function extFromFileName(name?: string): string | undefined {
+  if (!name) return undefined;
+  const ext = path.extname(name).replace('.', '').toLowerCase();
+  return ext || undefined;
+}
+
 export class ImageHasher implements INodeType {
-    description: INodeTypeDescription = {
-        displayName: 'Image Hasher',
-        name: 'imageHasher',
-        group: ['transform'],
-        version: 1,
-        description: 'Generate perceptual hash (pHash) for images',
-        defaults: {
-            name: 'Image Hasher',
-        },
-        inputs: ['main'],
-        outputs: ['main'],
-        icon: 'file:imageHash.svg',
-        properties: [
-            {
-                displayName: 'Binary Property',
-                name: 'binaryProperty',
-                type: 'string',
-                default: 'data',
-                required: true,
-                description: 'The name of the binary property containing the image',
-            },
-            {
-                displayName: 'Hash Size',
-                name: 'hashSize',
-                type: 'options',
-                options: [
-                    { name: '4 Bits (16 Bits Total)', value: 4 },
-                    { name: '8 Bits (64 Bits Total)', value: 8 },
-                    { name: '16 Bits (256 Bits Total)', value: 16 },
-                    { name: '32 Bits (1024 Bits Total)', value: 32 },
-                ],
-                default: 16,
-                description: 'Size of the hash - higher values capture more detail',
-            },
+  description: INodeTypeDescription = {
+    displayName: 'Image Hasher',
+    name: 'imageHasher',
+    icon: 'file:ImageHasher.svg',
+    group: ['transform'],
+    version: 1,
+    description: 'Compute perceptual hash (pHash/dHash/aHash) for an image binary property',
+    defaults: {
+      name: 'Image Hasher',
+    },
+    inputs: ['main'],
+    outputs: ['main'],
+    properties: [
+      {
+        displayName: 'Binary Property',
+        name: 'binaryProperty',
+        type: 'string',
+        default: 'data',
+        required: true,
+        description: 'Name of the binary property that contains the image',
+      },
+      {
+        displayName: 'Method',
+        name: 'method',
+        type: 'options',
+        options: [
+          { name: 'pHash', value: 'phash' },
+          { name: 'dHash', value: 'dhash' },
+          { name: 'aHash', value: 'ahash' },
         ],
-    };
+        default: 'phash',
+        description: 'Perceptual hashing algorithm',
+      },
+      {
+        displayName: 'Hash Size',
+        name: 'hashSize',
+        type: 'options',
+        options: [
+          { name: '8 (64 bits)', value: 8 },
+          { name: '16 (256 bits)', value: 16 },
+          { name: '32 (1024 bits)', value: 32 },
+        ],
+        default: 16,
+        description: 'Larger sizes are slower but can be more discriminative',
+      },
+      {
+        displayName: 'Output Field',
+        name: 'outputField',
+        type: 'string',
+        default: 'phash',
+        description: 'JSON field name to store the resulting hash',
+      },
+    ],
+  };
 
-    async execute(this: IExecuteFunctions): Promise<INodeExecutionData[][]> {
-        const items = this.getInputData();
-        const returnData: INodeExecutionData[] = [];
+  async execute(this: IExecuteFunctions): Promise<INodeExecutionData[][]> {
+    const items = this.getInputData();
+    const binaryProperty = this.getNodeParameter('binaryProperty', 0) as string;
+    const method = this.getNodeParameter('method', 0) as HashMethod;
+    const hashSize = this.getNodeParameter('hashSize', 0) as number;
+    const outputField = this.getNodeParameter('outputField', 0) as string;
 
-        for (let i = 0; i < items.length; i++) {
-            try {
-                const binaryProperty = this.getNodeParameter('binaryProperty', i) as string;
-                const hashSize = this.getNodeParameter('hashSize', i) as number;
+    const returnItems: INodeExecutionData[] = [];
 
-                const binaryData = items[i].binary?.[binaryProperty];
-                if (!binaryData) {
-                    throw new NodeOperationError(this.getNode(), `No binary data found in property "${binaryProperty}"`, { itemIndex: i });
-                }
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
 
-                // Save binary image to a temporary file
-                const tempDir = '/tmp/n8n-image-hasher';
-                if (!fs.existsSync(tempDir)) {
-                    fs.mkdirSync(tempDir, { recursive: true });
-                }
+      const bin = item.binary?.[binaryProperty];
+      if (!bin) {
+        throw new Error(
+          `Item ${i}: binary property "${binaryProperty}" not found. Available: ${Object.keys(item.binary ?? {}).join(', ')}`
+        );
+      }
 
-                const extension = binaryData.mimeType?.split('/')[1] || 'png';
-                const tempPath = path.join(tempDir, `${Date.now()}-${i}.${extension}`);
-                const buffer = Buffer.from(binaryData.data, 'base64');
-                fs.writeFileSync(tempPath, buffer);
+      // n8n stores binary.data as base64 by default
+      const encoding = (bin as any).encoding ?? 'base64';
+      const data = (bin as any).data as string | undefined;
+      if (!data) {
+        throw new Error(`Item ${i}: binary.${binaryProperty}.data is missing`);
+      }
 
-                // Generate perceptual hash (pHash)
-                const hash = await new Promise<string>((resolve, reject) => {
-                    (imageHash as any).imageHash(tempPath, hashSize, true, (err: any, data: string) => {
-                        if (err) reject(err);
-                        else resolve(data);
-                    });
-                });
+      const buffer = Buffer.from(data, encoding);
 
-                // Cleanup temp file
-                fs.unlinkSync(tempPath);
+      // Determine extension for a temp file
+      const ext =
+        extFromFileName(bin.fileName) ??
+        (bin as any).fileExtension ??
+        extFromMime(bin.mimeType) ??
+        'img';
 
-                returnData.push({
-                    json: {
-                        hash,
-                        algorithm: 'phash',
-                        size: hashSize,
-                        totalBits: hashSize * hashSize,
-                        createdAt: new Date().toISOString(),
-                    },
-                });
+      const tmpPath = await tmpName({ postfix: `.${ext}` });
 
-            } catch (error: any) {
-                if (this.continueOnFail()) {
-                    returnData.push({
-                        json: { error: error.message },
-                    });
-                    continue;
-                }
-                throw error;
-            }
-        }
+      try {
+        await fs.writeFile(tmpPath, buffer);
 
-        return [returnData];
+        // imghash.hash(filePath, bits, method)
+        const hash = await imghash.hash(tmpPath, hashSize, method);
+
+        returnItems.push({
+          json: {
+            ...(item.json ?? {}),
+            [outputField]: hash,
+            hashMethod: method,
+            hashSize,
+            mimeType: bin.mimeType,
+            fileName: bin.fileName,
+          },
+          binary: item.binary,
+        });
+      } finally {
+        // Best-effort cleanup
+        try {
+          await fs.unlink(tmpPath);
+        } catch {}
+      }
     }
+
+    return [returnItems];
+  }
 }

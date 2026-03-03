@@ -1,25 +1,29 @@
 {
-  "name": "n8n-nodes-image-hasher",
-  "version": "0.1.1",
-  "description": "An n8n community node that generates perceptual hashes (pHash) of images to detect duplicates and manipulations.",
+  "name": "n8n-nodes-image-hasher-fix",
+  "version": "0.1.0",
+  "description": "n8n community node to generate perceptual hashes (pHash/dHash/aHash) from image binaries.",
   "license": "MIT",
   "author": {
-    "name": "Lydia Benzemrane",
-    "email": "lydia.benzemrane@gmail.com"
+    "name": "8JO8"
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/lydiaBn/n8n-nodes-image-hasher.git"
+    "url": "https://github.com/8JO8/n8n-nodes-image-hasher-fix.git"
   },
   "keywords": [
     "n8n-community-node-package",
-    "n8n-community-node",
+    "n8n",
     "image-hash",
     "phash",
-    "duplicate-detection",
-    "image-processing"
+    "dhash",
+    "ahash",
+    "duplicate-detection"
   ],
   "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
   "n8n": {
     "n8nNodesApiVersion": 1,
     "nodes": [
@@ -27,28 +31,17 @@
     ]
   },
   "scripts": {
-    "build": "tsc && npm run copy-svg",
-    "copy-svg": "copyfiles -u 2 nodes/ImageHasher/imageHash.svg dist/nodes/ImageHasher",
-    "lint": "eslint . --ext .ts",
-    "format": "prettier --write \"src/**/*.ts\"",
+    "build": "tsc -p tsconfig.json && npm run copy-assets",
+    "copy-assets": "copyfiles -u 1 \"nodes/**/*.svg\" dist/nodes",
     "prepare": "npm run build"
   },
-  "files": [
-    "dist"
-  ],
+  "dependencies": {
+    "imghash": "^1.1.0",
+    "tmp-promise": "^3.0.3"
+  },
   "devDependencies": {
     "@types/node": "^20.0.0",
-    "@typescript-eslint/eslint-plugin": "^8.45.0",
-    "@typescript-eslint/parser": "^8.45.0",
     "copyfiles": "^2.4.1",
-    "eslint": "^8.57.0",
-    "eslint-plugin-n8n-nodes-base": "^1.16.3",
-    "n8n-core": "^1.113.1",
-    "n8n-workflow": "^1.111.0",
-    "prettier": "^3.2.5",
     "typescript": "^5.4.2"
-  },
-  "dependencies": {
-    "image-hash": "^5.3.2"
   }
 }
